@@ -1,0 +1,4 @@
+project_id = "pad"
+
+[functions.append]
+verify_jwt = false

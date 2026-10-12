@@ -1,68 +1,78 @@
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
+  --background: #3c3c3c;
+  --surface: #474747;
+  --hover: #525252;
+  --text: #ffffff;
+  --muted: #b5b5b5;
+  --divider: #525252;
+  --error: #ff8a80;
+  color: var(--text);
+  background: var(--background);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  color-scheme: dark;
 }
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
-}
-
-body {
-  margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
-}
-
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
-}
-
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
-}
-
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; width: 100%; height: 100%; background: var(--background); }
+body { min-width: 280px; }
+button, input, textarea { font: inherit; color: var(--text); border-radius: 0; }
+button { cursor: pointer; background: var(--surface); border: 0; padding: 10px 12px; min-height: 44px; }
+button:hover, button:active { background: var(--hover); }
+button:disabled { opacity: .5; cursor: default; }
+:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }
+input { font-size: 16px; width: 100%; padding: 12px; border: 0; background: var(--surface); }
+input::placeholder { color: var(--muted); opacity: 1; }
+h1, h2, h3, p { margin: 0; }
+h1 { font-size: 24px; font-weight: 400; margin-bottom: 24px; }
+h2 { font-size: 16px; font-weight: 400; }
+h3 { font-size: 14px; font-weight: 400; margin: 32px 0 12px; }
+p { line-height: 1.6; margin: 12px 0; }
+.muted, .save-status { color: var(--muted); }
+.error { color: var(--error); }
+.sr-only, .username { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.login { min-height: 100%; min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
+.login form { width: min(100%, 320px); }
+.login form > button { margin-top: 12px; width: 100%; }
+.login .error { font-size: 13px; }
+.scratchpad { height: 100%; height: 100dvh; display: flex; flex-direction: column; padding-bottom: env(safe-area-inset-bottom); }
+.bar { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; min-height: 48px; padding: env(safe-area-inset-top) max(8px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left)); background: var(--surface); border-bottom: 1px solid var(--divider); gap: 8px; }
+.bar nav { display: flex; align-items: center; }
+.save-status { font-size: 12px; white-space: nowrap; }
+.scratchpad > textarea { flex: 1; min-height: 0; width: 100%; padding: 24px max(24px, env(safe-area-inset-right)) 24px max(24px, env(safe-area-inset-left)); background: var(--background); border: 0; resize: none; outline: none; font-size: 16px; line-height: 1.5; }
+.scratchpad > textarea:focus-visible { outline: 1px solid var(--divider); outline-offset: -1px; }
+.menu-wrap { position: relative; }
+.menu-dismiss { position: fixed; inset: 0; background: transparent !important; z-index: 2; width: 100%; height: 100%; cursor: default; }
+.menu { position: absolute; top: 100%; right: 0; min-width: 230px; z-index: 3; background: var(--surface); border-top: 1px solid var(--divider); }
+.menu button { display: block; width: 100%; text-align: left; }
+.banner { flex-shrink: 0; background: var(--surface); border-bottom: 1px solid var(--divider); display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 16px; font-size: 13px; }
+.banner > div { display: flex; flex-shrink: 0; }
+.overlay { position: fixed; inset: 0; z-index: 4; background: var(--background); display: flex; flex-direction: column; padding-bottom: env(safe-area-inset-bottom); }
+.panel-body { overflow: auto; flex: 1; padding: 24px max(24px, env(safe-area-inset-right)) 40px max(24px, env(safe-area-inset-left)); }
+.panel-body > * { max-width: 900px; margin-left: auto; margin-right: auto; }
+.history-list { margin-top: 20px; }
+.history-item { display: block; width: 100%; text-align: left; background: transparent; padding: 20px 0; border-bottom: 1px solid var(--divider); }
+.history-item > span { display: block; }
+.history-item .muted { font-size: 12px; line-height: 1.6; }
+.snippet { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; margin-top: 8px; }
+.detail-bar, .copy-row, .key-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.copy-row { background: var(--surface); padding-left: 12px; }
+.copy-row code { overflow-wrap: anywhere; min-width: 0; font-size: 13px; line-height: 1.6; user-select: all; }
+.copy-row button { flex-shrink: 0; }
+.note-detail { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 16px; line-height: 1.5; margin-top: 24px; }
+.key-form { display: grid; gap: 12px; margin-top: 32px; }
+.key-form label { font-size: 14px; }
+.key-form button { justify-self: start; }
+.key-reveal { margin-top: 24px; }
+.key-item { padding: 20px 0; border-bottom: 1px solid var(--divider); }
+.key-item strong { font-weight: 400; overflow-wrap: anywhere; }
+.key-item p { font-size: 12px; margin-bottom: 0; }
+@media (max-width: 480px) {
+  .bar { padding-left: max(12px, env(safe-area-inset-left)); gap: 4px; }
+  .bar button { padding-left: 10px; padding-right: 10px; font-size: 14px; }
+  .scratchpad > textarea, .panel-body { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+  .banner { flex-wrap: wrap; padding: 8px 12px; }
+  .banner button { font-size: 13px; }
+  .copy-row { flex-wrap: wrap; padding: 12px; gap: 8px; }
 }
