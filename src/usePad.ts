@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { supabase, type Note } from './supabase'
+import { getCurrentNote, saveNote, cutNote, editNote, watchNotes, type Note } from './data'
 
 type PadState = {
   note: Note | null
@@ -7,11 +7,12 @@ type PadState = {
   conflict: Note | null
   loading: boolean
   saving: boolean
+  transitioning: boolean
   offline: boolean
   error: string
 }
-type Draft = { note: Note; text: string }
-const initial: PadState = { note: null, text: '', conflict: null, loading: true, saving: false, offline: !navigator.onLine, error: '' }
+type Draft = { note: Note; text: string; unsaved?: boolean }
+const initial: PadState = { note: null, text: '', conflict: null, loading: true, saving: false, transitioning: false, offline: !navigator.onLine, error: '' }
 
 class PadController {
   state = { ...initial }
@@ -20,7 +21,8 @@ class PadController {
   pending: Promise<void> | null = null
   queued: Note | null = null
   fetchId = 0
-  retired = new Set<string>()
+  unconfirmed = false
+  pendingText: string | null = null
   storageKey: string
   constructor(userId: string, private publish: (state: PadState) => void) {
     this.storageKey = `pad:draft:${userId}`
@@ -29,18 +31,16 @@ class PadController {
       if (draft?.note?.user_id === userId && typeof draft.text === 'string' && typeof draft.note.content === 'string' && typeof draft.note.version === 'number') {
         this.state.note = draft.note
         this.state.text = draft.text
+        this.unconfirmed = draft.unsaved === true
       }
     } catch { /* Storage can be unavailable in private browsing. */ }
   }
-  get dirty() { return !!this.state.note && this.state.text !== this.state.note.content }
+  get dirty() { return !!this.state.note && (this.unconfirmed || this.state.text !== this.state.note.content || (this.pendingText !== null && this.state.text !== this.pendingText)) }
   emit(patch: Partial<PadState> = {}) {
     if (this.stopped) return
-    if (patch.note && this.state.note && patch.note.id !== this.state.note.id) {
-      this.retired.add(this.state.note.id)
-    }
     this.state = { ...this.state, ...patch }
     try {
-      if (this.dirty) localStorage.setItem(this.storageKey, JSON.stringify({ note: this.state.note, text: this.state.text }))
+      if (this.dirty) localStorage.setItem(this.storageKey, JSON.stringify({ note: this.state.note, text: this.state.text, unsaved: true }))
       else localStorage.removeItem(this.storageKey)
     } catch { /* The in-memory draft still works when storage is full or disabled. */ }
     this.publish(this.state)
@@ -54,10 +54,10 @@ class PadController {
     if (!this.state.conflict && !this.state.offline) this.timer = setTimeout(() => { void this.save() }, 600)
   }
   receive(note: Note) {
-    if (this.stopped || note.status !== 'current' || this.retired.has(note.id)) return
+    if (this.stopped || note.status !== 'current') return
     const newest = this.queued || this.state.conflict || this.state.note
-    if (newest && newest.id !== note.id && newest.created_at > note.created_at) return
-    if (this.pending) {
+    if (newest && newest.id !== note.id && newest.updated_at > note.updated_at) return
+    if (this.pending || this.state.transitioning) {
       if (!this.queued || this.queued.id !== note.id || this.queued.version < note.version) this.queued = note
       return
     }
@@ -70,9 +70,9 @@ class PadController {
   refresh = async () => {
     const fetchId = ++this.fetchId
     try {
-      const { data, error } = await supabase.rpc('get_current_note')
+      const data = await getCurrentNote()
       if (this.stopped || fetchId !== this.fetchId) return
-      if (error || !data) throw error || new Error('No note returned')
+      if (!data) throw new Error('No note returned')
       this.receive(data as Note)
       this.emit({ loading: false, offline: !navigator.onLine, error: '' })
       this.schedule()
@@ -84,7 +84,7 @@ class PadController {
     clearTimeout(this.timer)
     if (this.pending) {
       await this.pending
-      if (this.dirty && !this.state.conflict && !this.state.offline) return this.save()
+      if (this.dirty && !this.state.conflict && !this.state.offline && !this.state.error) return this.save()
       return
     }
     if (this.stopped || !this.dirty || this.state.conflict || !this.state.note) return
@@ -92,13 +92,16 @@ class PadController {
     const note = this.state.note
     const text = this.state.text
     ++this.fetchId
+    this.pendingText = text
     this.emit({ saving: true, error: '' })
     const run = async () => {
       try {
-        const { data, error } = await supabase.rpc('save_note', { p_id: note.id, p_content: text, p_expected_version: note.version })
+        const data = await saveNote(note.id, text, note.version)
         if (this.stopped) return
-        if (error || !data?.note) throw error || new Error('No note returned')
-        const server = data.note as Note
+        if (!data?.note) throw new Error('No note returned')
+        const server = data.note
+        this.pendingText = null
+        this.unconfirmed = false
         if (data.ok) {
           // Edits typed during the request stay in the draft against the new version.
           this.emit({ note: server, conflict: null, offline: false })
@@ -106,6 +109,8 @@ class PadController {
           this.emit({ note: server.id === note.id ? note : server, conflict: server, offline: false })
         }
       } catch {
+        this.pendingText = null
+        this.unconfirmed = true
         this.emit({ offline: !navigator.onLine, error: navigator.onLine ? 'Unable to save. Your draft is kept on this device.' : '' })
       }
     }
@@ -114,7 +119,7 @@ class PadController {
     this.pending = null
     ++this.fetchId
     this.emit({ saving: false })
-    if (this.queued) {
+    if (this.queued && !this.state.transitioning) {
       const queued = this.queued
       this.queued = null
       this.receive(queued)
@@ -123,7 +128,7 @@ class PadController {
   }
   useTheirs = () => {
     const server = this.state.conflict
-    if (server) this.emit({ note: server, text: server.content, conflict: null, error: '' })
+    if (server) { this.unconfirmed = false; this.emit({ note: server, text: server.content, conflict: null, error: '' }) }
   }
   keepMine = () => {
     const server = this.state.conflict
@@ -131,20 +136,28 @@ class PadController {
     this.emit({ note: server, conflict: null, error: '' })
     void this.save()
   }
-  newNote = async () => {
+  transition = async (id?: string) => {
+    if (this.state.transitioning || this.state.conflict || this.state.offline) return false
+    if (!id && !this.state.text.trim()) return false
+    this.emit({ transitioning: true, error: '' })
     await this.save()
-    if (this.stopped || this.dirty || this.state.conflict || this.state.offline) return false
+    if (this.stopped || this.dirty || this.state.conflict || this.state.offline) {
+      this.emit({ transitioning: false })
+      if (this.queued) { const queued = this.queued; this.queued = null; this.receive(queued) }
+      return false
+    }
     try {
       ++this.fetchId
-      const { data, error } = await supabase.rpc('new_note')
-      if (error || !data) throw error || new Error('No note returned')
+      const note = id ? await editNote(id) : await cutNote()
       if (this.stopped) return false
-      // A draft typed while New was in flight must never be discarded.
       ++this.fetchId
-      this.receive(data as Note)
+      this.unconfirmed = false
+      this.emit({ note, text: note.content, conflict: null, transitioning: false })
+      if (this.queued) { const queued = this.queued; this.queued = null; this.receive(queued) }
       return true
     } catch {
-      this.emit({ offline: !navigator.onLine, error: 'Unable to start a new note.' })
+      this.emit({ transitioning: false, offline: !navigator.onLine, error: id ? 'Unable to edit block.' : 'Unable to cut draft.' })
+      if (this.queued) { const queued = this.queued; this.queued = null; this.receive(queued) }
       return false
     }
   }
@@ -159,12 +172,10 @@ export function usePad(userId: string) {
     setController(pad)
     pad.emit()
     void pad.refresh()
-    const channel = supabase.channel(`pad:${userId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notes', filter: `user_id=eq.${userId}` }, (payload) => {
-        const note = payload.new as Note
-        if (note.status === 'current') pad.receive(note)
-      })
-      .subscribe((status) => { if (status === 'SUBSCRIBED') void pad.refresh() })
+    const unsubscribe = watchNotes(userId, event => {
+      if (event.type === 'READY') void pad.refresh()
+      else if (event.type !== 'DELETE' && event.note.status === 'current') pad.receive(event.note)
+    })
     const focus = () => { void pad.refresh() }
     const visibility = () => {
       if (document.visibilityState === 'hidden') void pad.save()
@@ -182,7 +193,7 @@ export function usePad(userId: string) {
     window.addEventListener('beforeunload', unload)
     return () => {
       pad.stop()
-      void supabase.removeChannel(channel)
+      unsubscribe()
       window.removeEventListener('focus', focus)
       document.removeEventListener('visibilitychange', visibility)
       window.removeEventListener('offline', offline)
@@ -190,5 +201,5 @@ export function usePad(userId: string) {
       window.removeEventListener('beforeunload', unload)
     }
   }, [userId])
-  return { ...state, controller, dirty: !!state.note && state.text !== state.note.content }
+  return { ...state, controller, dirty: controller?.dirty || false }
 }

@@ -1,6 +1,6 @@
 # pad
 
-A personal, single-user plain-text scratchpad. Password login, autosave, live device sync, searchable history, and an append-only endpoint for an iOS share-sheet Shortcut. Notes roll over lazily after three hours without edits; blank notes are reused. Built with React, Vite, and Supabase. Attachments, tags, and other note kinds have schema support only.
+A personal, single-user text feed with a live draft composer. Password login, autosave, device sync, searchable blocks, and an append-only endpoint for an iOS share-sheet Shortcut. **Cut** (Ctrl/Cmd+Enter) archives the draft as a block; **Edit** restores a block to the composer, cutting any non-blank draft first. Notes also auto-cut lazily after three hours without edits. Blank drafts are reused. Built with React, Vite, and Supabase; installable as a PWA. Attachments, tags, and other note kinds have schema support only.
 
 ## Local development
 
@@ -11,7 +11,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-`npm run build` and `npm run lint` verify the SPA. Only the public anon/publishable key belongs in frontend environment variables; never use the service-role key there.
+`npm run build` runs TypeScript and builds the SPA and service worker. Only the public anon/publishable key belongs in frontend environment variables; never use the service-role key there.
 
 ## Supabase setup
 
@@ -33,11 +33,21 @@ npm run dev
    `supabase/config.toml` sets `verify_jwt = false` for this function because it authenticates `x-pad-key` itself. Supabase supplies `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` to hosted functions. The service-role-only database RPC cannot be called by browser clients.
 5. Sign in and open the menu → API key. Generate and copy a key; only its SHA-256 hash is stored. Revoke keys from this panel when no longer needed.
 
-The migration enables RLS on every table, permits only owned-row reads, and routes note writes through RPCs. Archived note rows cannot be written directly by clients. All note writers share a per-user transaction lock; optimistic versions protect concurrent edits. Realtime is enabled for `notes` in the migration.
+Apply both timestamped migrations in order. The original migration creates the schema; `20261012010000_pad_feed.sql` adds block editing/deletion, feed pagination, filtered full-content search, and full replica identity for Realtime. RLS restricts reads to owned rows; clients cannot write archived rows directly. Authorized RPCs handle restore and delete. Every note writer shares a per-user transaction lock; optimistic versions protect concurrent edits. Feed and search results include attachment metadata for a future UI. Timestamp ties are included at feed page boundaries to avoid skipped blocks.
 
 ## Vercel
 
 Import this repository into Vercel using its Vite preset (`npm run build`, output `dist`). Set `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `VITE_PAD_LOGIN_EMAIL` for the desired environments, then deploy. Add `pad.makro.ca` to the project's domains. Create the `pad` CNAME in the `makro.ca` DNS zone using the target Vercel shows for that domain, and wait for verification and HTTPS. `vercel.json` rewrites SPA paths to `/index.html`.
+
+## Install as an app
+
+On iPhone, open `https://pad.makro.ca` in Safari, then Share → **Add to Home Screen**. On desktop/Android, use the browser's install action. The manifest provides standalone display and grey theme/background colors. PNG icons (192, 512, maskable 512, and Apple 180) are included. To regenerate them without installing dependencies:
+
+```sh
+python3 scripts/generate-icons.py
+```
+
+`public/icons/pad.svg` is the vector icon. The service worker auto-updates and precaches only the app shell and icons. Supabase requests remain network-only; blocks are not cached for offline browsing. The current draft is saved locally when storage is available. All Supabase access lives in `src/data/index.ts` so UI components do not depend on the backend SDK.
 
 ## iOS Shortcut
 
@@ -64,8 +74,8 @@ It also accepts `Content-Type: text/plain`. Trailing whitespace is trimmed; empt
 
 ## Behavior and verification
 
-Autosave waits 600 ms and also runs on blur or when the page is hidden. Unsaved drafts are stored per user in this browser when localStorage is available; reconnecting retries. Browser termination can interrupt a network save, so the stored draft is recovered on the next login. Conflicts require **Use theirs** or **Keep mine**. **New** saves the current draft before archiving it. History search always goes through `search_notes`.
+Autosave waits 600 ms and also runs on blur or when the page is hidden. Unsaved drafts are stored per user in this browser when localStorage is available; reconnecting retries. Browser termination can interrupt a network save, so the stored draft is recovered on the next login. Conflicts require **Use theirs** or **Keep mine**. **Cut** saves the draft before archiving it; **Edit** saves and cuts any existing draft before restoring a block. The feed orders blocks by cut time, oldest to newest, and loads older pages at the top. New arrivals scroll down only when already near the bottom; otherwise use the **New** pill. Search and All/Text/Links filters use `search_notes`. Copy always copies the full block, even when collapsed. Delete asks for confirmation.
 
 **Sign out** ends this device's session; **Sign out everywhere** revokes all refresh sessions after confirmation. Already-issued access tokens can remain valid until expiry, as with standard Supabase Auth behavior.
 
-Before release, verify against your live project: migration application and permissions, owner login with closed signups, simultaneous saves and rollover, two-device Realtime latency, offline recovery, history search, API key revocation, function responses, and the iOS Shortcut. Build/lint checks cannot verify hosted Auth, Realtime, Edge Functions, DNS, or real iPhone Safari behavior.
+Validation for this iteration is limited to `npm run build`, including TypeScript. Manually check migration application, login with closed signups, simultaneous saves/conflicts, cut/edit/delete across devices, paging/search, clipboard, idle rollover and share-sheet append, API key revocation, offline draft recovery, PWA install/update, and keyboard/safe-area behavior in iPhone Safari and standalone mode. No live Supabase project, deployment, browser test, or latency check was used.

@@ -1,14 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { appendUrl, supabase, type Note } from './supabase'
+import { appendUrl, generateKey, listKeys, revokeKey, type ApiKey } from './data'
 
 const date = (value: string) => new Date(value).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 
-export function CopyButton({ text }: { text: string }) {
+export function CopyButton({ text, className = '' }: { text: string; className?: string }) {
   const [status, setStatus] = useState('Copy')
-  return <button onClick={async () => {
+  const timer = useRef<ReturnType<typeof setTimeout>>()
+  useEffect(() => () => clearTimeout(timer.current), [])
+  return <button className={className} onClick={async () => {
+    clearTimeout(timer.current)
     try { await navigator.clipboard.writeText(text); setStatus('Copied') }
-    catch { setStatus('Unable to copy — select text') }
-  }}>{status}</button>
+    catch { setStatus('Copy failed') }
+    timer.current = setTimeout(() => setStatus('Copy'), 1500)
+  }} aria-label={status === 'Copy' ? 'Copy full text' : status}>{status}</button>
 }
 
 function Panel({ title, close, children }: { title: string; close: () => void; children: React.ReactNode }) {
@@ -34,65 +38,6 @@ function Panel({ title, close, children }: { title: string; close: () => void; c
   </section>
 }
 
-type SearchResult = { id: string; created_at: string; archived_at: string; snippet: string; rank: number }
-export function History({ close }: { close: () => void }) {
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState<SearchResult[]>([])
-  const [note, setNote] = useState<Note | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [more, setMore] = useState(false)
-  const [error, setError] = useState('')
-  const generation = useRef(0)
-  const openRequest = useRef(0)
-  useEffect(() => {
-    const request = ++generation.current
-    setLoading(true)
-    setError('')
-    const timer = setTimeout(async () => {
-      const { data, error } = await supabase.rpc('search_notes', { p_query: query, p_limit: 50, p_offset: 0 })
-      if (request !== generation.current) return
-      if (error) { setError('Unable to search history.'); setResults([]); setMore(false) }
-      else { setResults(data || []); setMore(data?.length === 50) }
-      setLoading(false)
-    }, 250)
-    return () => { clearTimeout(timer); generation.current = request + 1 }
-  }, [query])
-  const loadMore = async () => {
-    const request = generation.current
-    setLoading(true)
-    setError('')
-    const { data, error } = await supabase.rpc('search_notes', { p_query: query, p_limit: 50, p_offset: results.length })
-    if (request !== generation.current) return
-    if (error) setError('Unable to load more notes.')
-    else { setResults(previous => [...previous, ...(data || [])]); setMore(data?.length === 50) }
-    setLoading(false)
-  }
-  return <Panel title="History" close={close}>
-    {note ? <>
-      <div className="detail-bar"><button onClick={() => setNote(null)}>← Back</button><CopyButton text={note.content} /></div>
-      <p className="muted">{date(note.created_at)} → {date(note.archived_at!)}</p>
-      <pre className="note-detail" tabIndex={0}>{note.content}</pre>
-    </> : <>
-      <label className="sr-only" htmlFor="search">Search archived notes</label>
-      <input id="search" type="search" placeholder="Search history" value={query} onChange={event => setQuery(event.target.value)} autoComplete="off" />
-      {error && <p role="alert" className="error">{error}</p>}
-      <div className="history-list" aria-busy={loading}>
-        {results.map(item => <button className="history-item" key={item.id} onClick={async () => {
-          const request = ++openRequest.current
-          const { data, error } = await supabase.from('notes').select('*').eq('id', item.id).eq('status', 'archived').single()
-          if (request !== openRequest.current) return
-          if (error) setError('Unable to open note.')
-          else { setError(''); setNote(data as Note) }
-        }}><span className="muted">{date(item.created_at)} → {date(item.archived_at)}</span><span className="snippet">{item.snippet}</span></button>)}
-      </div>
-      {loading && <p className="muted" role="status">Loading…</p>}
-      {!loading && !results.length && !error && <p className="muted">{query ? 'No matching notes.' : 'No archived notes yet.'}</p>}
-      {more && <button disabled={loading} onClick={() => void loadMore()}>Load more</button>}
-    </>}
-  </Panel>
-}
-
-type ApiKey = { id: string; label: string; created_at: string; last_used_at: string | null; revoked_at: string | null }
 export function ApiKeys({ close }: { close: () => void }) {
   const [keys, setKeys] = useState<ApiKey[]>([])
   const [label, setLabel] = useState('iOS Shortcut')
@@ -101,24 +46,15 @@ export function ApiKeys({ close }: { close: () => void }) {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const refresh = async () => {
-    const { data, error } = await supabase.from('api_keys').select('id, label, created_at, last_used_at, revoked_at').order('created_at', { ascending: false })
-    if (error) setError('Unable to load API keys.')
-    else setKeys(data || [])
+    try { setKeys(await listKeys()) }
+    catch { setError('Unable to load API keys.') }
     setLoading(false)
   }
   useEffect(() => { void refresh() }, [])
   const generate = async () => {
     setBusy(true); setError(''); setRawKey('')
-    try {
-      const bytes = crypto.getRandomValues(new Uint8Array(32))
-      const raw = 'pad_' + btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw))
-      const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
-      const { error } = await supabase.from('api_keys').insert({ label: label.trim() || 'Untitled key', key_hash: hash })
-      if (error) throw error
-      setRawKey(raw)
-      await refresh()
-    } catch { setError('Unable to generate a key.') }
+    try { setRawKey(await generateKey(label)); await refresh() }
+    catch { setError('Unable to generate a key.') }
     setBusy(false)
   }
   return <Panel title="API keys" close={close}>
@@ -139,9 +75,8 @@ export function ApiKeys({ close }: { close: () => void }) {
       <div><strong>{key.label}</strong><p className="muted">Created {date(key.created_at)}<br />Last used {key.last_used_at ? date(key.last_used_at) : 'never'}</p></div>
       {key.revoked_at ? <span className="muted">Revoked</span> : <button disabled={busy} onClick={async () => {
         setBusy(true); setError('')
-        const { error } = await supabase.from('api_keys').update({ revoked_at: new Date().toISOString() }).eq('id', key.id)
-        if (error) setError('Unable to revoke key.')
-        else await refresh()
+        try { await revokeKey(key.id); await refresh() }
+        catch { setError('Unable to revoke key.') }
         setBusy(false)
       }}>Revoke</button>}
     </div>)}
