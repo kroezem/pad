@@ -51,7 +51,7 @@ Deno.serve(async (request: Request) => {
     text = text.trimEnd()
     if (!text) return reply(400, { error: 'Text is required' })
     if (Array.from(text as string).length > 100_000) return reply(413, { error: 'Text is too long' })
-    const { error } = await client.rpc('append_to_current', { p_user_id: apiKey.user_id, p_text: text })
+    const { error } = await client.rpc('insert_note_for_user', { p_user_id: apiKey.user_id, p_text: text })
     if (error) return reply(500, { error: 'Unable to append' })
     const { error: usageError } = await client.from('api_keys').update({ last_used_at: new Date().toISOString() }).eq('id', apiKey.id)
     if (usageError) console.error('Unable to update API key usage timestamp')

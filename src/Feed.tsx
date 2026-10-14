@@ -1,9 +1,15 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { deleteNote, feedNotes, searchNotes, watchNotes, type Block, type Filter } from './data'
 import { CopyButton } from './Panels'
 
-const ordered = (items: Block[]) => [...new Map(items.map(item => [item.id, item])).values()]
-  .sort((a, b) => a.archived_at.localeCompare(b.archived_at) || a.id.localeCompare(b.id))
+const ordered = (items: Block[]) => {
+  const unique = new Map<string, Block>()
+  for (const item of items) {
+    const previous = unique.get(item.id)
+    if (!previous || item.sent_at >= previous.sent_at) unique.set(item.id, item)
+  }
+  return [...unique.values()].sort((a, b) => a.sent_at.localeCompare(b.sent_at) || a.id.localeCompare(b.id))
+}
 const dayKey = (value: string) => new Date(value).toLocaleDateString()
 function dayLabel(value: string) {
   const day = new Date(value)
@@ -14,11 +20,12 @@ function dayLabel(value: string) {
   if (dayKey(value) === dayKey(yesterday.toISOString())) return 'Yesterday'
   return day.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', ...(day.getFullYear() !== today.getFullYear() ? { year: 'numeric' as const } : {}) })
 }
-function TextBlock({ block, edit, remove, disabled }: { block: Block; edit: (id: string) => void; remove: (id: string) => void; disabled: boolean }) {
+function TextBlock({ block, edit, remove, disabled, editing }: { block: Block; edit: (block: Block) => void; remove: (id: string) => void; disabled: boolean; editing: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const [actions, setActions] = useState(false)
   const [long, setLong] = useState(false)
-  const text = useRef<HTMLPreElement>(null)
+  const text = useRef<HTMLDivElement>(null)
+  const card = useRef<HTMLElement>(null)
   const lines = block.content.split('\n')
   const code = block.content.includes('\t') || lines.filter(line => /^ {2,}\S/.test(line)).length >= 2 || (block.content.match(/[{};]/g)?.length || 0) >= 6
   const url = /^https?:\/\/\S+$/i.test(block.content.trim()) ? block.content.trim() : null
@@ -31,21 +38,27 @@ function TextBlock({ block, edit, remove, disabled }: { block: Block; edit: (id:
     observer.observe(element)
     return () => observer.disconnect()
   }, [block.content, code])
-  return <article className={`block${actions ? ' actions-open' : ''}`} data-note-id={block.id}>
-    <div className="block-head"><time dateTime={block.archived_at}>{new Date(block.archived_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</time>
-      <div className="block-actions"><span className="secondary-actions"><button disabled={disabled} onClick={() => edit(block.id)}>Edit</button><button disabled={disabled} onClick={() => remove(block.id)}>Delete</button></span><CopyButton text={block.content} className="block-copy" /></div>
+  return <article ref={card} className={`block${actions ? ' actions-open' : ''}${editing ? ' editing' : ''}`} data-note-id={block.id}>
+    <div className="block-head"><time dateTime={block.sent_at}>{new Date(block.sent_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</time>
+      <div className="block-actions"><span className="secondary-actions"><button disabled={disabled} onClick={() => edit(block)}>Edit</button><button disabled={disabled} onClick={() => remove(block.id)}>Delete</button></span><CopyButton text={block.content} className="block-copy" /></div>
     </div>
-    <div className="block-body" onClick={() => { if (window.matchMedia('(hover: none)').matches) setActions(!actions) }}>
-      {url ? <a href={url} target="_blank" rel="noopener noreferrer" onClick={event => event.stopPropagation()}>{url}</a> : <pre ref={text} className={`${code ? 'code' : ''}${!expanded ? ' collapsed' : ''}`}>{block.content}</pre>}
+    <div ref={text} className={`block-body${long && !expanded ? ' is-collapsed' : ''}`} onClick={() => { if (window.matchMedia('(hover: none)').matches) setActions(!actions) }}>
+      {url ? <a href={url} target="_blank" rel="noopener noreferrer" onClick={event => event.stopPropagation()}>{url}</a> : <pre className={code ? 'code' : ''}>{block.content}</pre>}
     </div>
-    {long && <button className="show-more" onClick={() => setExpanded(!expanded)}>{expanded ? 'Show less' : 'Show more'}</button>}
-    <div className="touch-actions"><button disabled={disabled} onClick={() => edit(block.id)}>Edit</button><button disabled={disabled} onClick={() => remove(block.id)}>Delete</button></div>
+    {long && <button className="show-more" onClick={() => {
+      const element = card.current
+      const feed = element?.closest('.feed')
+      const visibleTop = feed ? feed.getBoundingClientRect().top + parseFloat(getComputedStyle(feed).paddingTop) : 0
+      if (expanded && element && feed && element.getBoundingClientRect().top < visibleTop) feed.scrollTop += element.getBoundingClientRect().top - visibleTop
+      setExpanded(!expanded)
+    }}>{expanded ? 'Show less' : 'Show more'}</button>}
+    <div className="touch-actions"><button disabled={disabled} onClick={() => edit(block)}>Edit</button><button disabled={disabled} onClick={() => remove(block.id)}>Delete</button></div>
   </article>
 }
 
 type Position = { mode: 'reset' | 'prepend' | 'update'; height: number; top: number; bottom: boolean; anchor?: string; offset?: number }
-export function Feed({ userId, query, filter, revision, edit, disabled }: {
-  userId: string; query: string; filter: Filter; revision: number; edit: (id: string) => void; disabled: boolean
+export function Feed({ userId, query, filter, sent, editingId, edit, disabled }: {
+  userId: string; query: string; filter: Filter; sent: Block | null; editingId?: string; edit: (block: Block) => void; disabled: boolean
 }) {
   const [items, setItems] = useState<Block[]>([])
   const [loading, setLoading] = useState(true)
@@ -107,14 +120,15 @@ export function Feed({ userId, query, filter, revision, edit, disabled }: {
           const page: Block[] = searchMode ? await searchNotes(query.trim(), filter, found.length) : await feedNotes(before)
           found = [...found, ...page]
           hasMore = page.length >= 50
-          before = page[page.length - 1]?.archived_at || null
+          before = page[page.length - 1]?.sent_at || null
         } while (found.length < count && hasMore)
         if (!active || request !== generation.current) return
+        if (eventVersion.current !== eventsAtStart) return
         const previousIds = new Set(itemsRef.current.map(item => item.id))
         capture(reset ? 'reset' : 'update', !reset && found.some(item => !previousIds.has(item.id)))
         setItems(ordered(found)); setMore(hasMore); moreRef.current = hasMore
         setError(''); initialized.current = true
-      } catch { if (active) setError('Unable to load blocks. Your draft is still available.') }
+      } catch { if (active) setError('Unable to load messages. Your draft is still available.') }
       finally {
         if (active) { setLoading(false); loadingRef.current = false }
         if (active && eventVersion.current !== eventsAtStart) refreshRef.current()
@@ -134,12 +148,9 @@ export function Feed({ userId, query, filter, revision, edit, disabled }: {
       if (event.type === 'DELETE') {
         capture('update')
         setItems(previous => previous.filter(item => item.id !== event.id))
-      } else if (event.note.status === 'archived' && event.note.archived_at) {
-        capture('update', !itemsRef.current.some(item => item.id === event.note.id))
-        setItems(previous => ordered([...previous.filter(item => item.id !== event.note.id), { ...event.note, archived_at: event.note.archived_at! }]))
       } else {
-        capture('update')
-        setItems(previous => previous.filter(item => item.id !== event.note.id))
+        capture('update', !itemsRef.current.some(item => item.id === event.note.id))
+        setItems(previous => ordered([...previous.filter(item => item.id !== event.note.id), { ...event.note, attachments: previous.find(item => item.id === event.note.id)?.attachments }]))
       }
     })
     const refresh = () => refreshRef.current()
@@ -154,33 +165,42 @@ export function Feed({ userId, query, filter, revision, edit, disabled }: {
       document.removeEventListener('visibilitychange', visibility)
     }
   }, [userId, query, filter, searchMode, capture])
-  useEffect(() => { if (revision) refreshRef.current() }, [revision])
+  useEffect(() => {
+    if (!sent) return
+    ++eventVersion.current
+    if (searchMode) { refreshRef.current(); return }
+    capture('update', true)
+    setItems(previous => ordered([...previous.filter(item => item.id !== sent.id), { ...sent, attachments: previous.find(item => item.id === sent.id)?.attachments }]))
+  }, [sent, searchMode, capture])
 
   const loadOlder = async () => {
     if (loadingRef.current || !moreRef.current) return
     loadingRef.current = true; setLoading(true); setError('')
     const request = generation.current
+    const eventsAtStart = eventVersion.current
     try {
-      const page = searchMode ? await searchNotes(query.trim(), filter, itemsRef.current.length) : await feedNotes(itemsRef.current[0]?.archived_at)
+      const page = searchMode ? await searchNotes(query.trim(), filter, itemsRef.current.length) : await feedNotes(itemsRef.current[0]?.sent_at)
       if (request !== generation.current) return
+      if (eventVersion.current !== eventsAtStart) { refreshRef.current(); return }
       capture('prepend')
       setItems(previous => ordered([...page, ...previous]))
       setMore(page.length >= 50); moreRef.current = page.length >= 50
-    } catch { if (request === generation.current) setError('Unable to load older blocks.') }
+    } catch { if (request === generation.current) setError('Unable to load older messages.') }
     finally { if (request === generation.current) { setLoading(false); loadingRef.current = false } }
   }
   const remove = async (id: string) => {
-    if (!window.confirm('Delete this block? This cannot be undone.')) return
+    if (!window.confirm('Delete this message? This cannot be undone.')) return
     setDeleting(true); setError('')
     try {
       await deleteNote(id)
+      ++eventVersion.current
       capture('update'); setItems(previous => previous.filter(item => item.id !== id))
       if (searchMode) refreshRef.current()
     } catch { setError('Unable to delete block.') }
     setDeleting(false)
   }
   return <>
-    <div className="feed" ref={scroller} aria-label={searchMode ? 'Search results' : 'Text blocks'} onScroll={() => {
+    <div className="feed" ref={scroller} aria-label={searchMode ? 'Search results' : 'Messages'} onScroll={() => {
       const element = scroller.current
       if (!element) return
       if (element.scrollHeight - element.scrollTop - element.clientHeight < 100) setNewBlocks(false)
@@ -190,13 +210,13 @@ export function Feed({ userId, query, filter, revision, edit, disabled }: {
         {more && <button className="load-more" disabled={loading} onClick={() => void loadOlder()}>Load older</button>}
         {loading && <p className="feed-message muted" role="status">Loading…</p>}
         {error && <p className="feed-message error" role="alert">{error} <button onClick={() => refreshRef.current()}>Retry</button></p>}
-        {!loading && !items.length && !error && <p className="feed-message muted">{searchMode ? 'No matching blocks.' : 'Write something below. Cut it to keep it here.'}</p>}
-        {items.map((block, index) => <Fragment key={block.id}>
-          {(!index || dayKey(items[index - 1].archived_at) !== dayKey(block.archived_at)) && <div className="day-divider">{dayLabel(block.archived_at)}</div>}
-          <TextBlock block={block} edit={edit} remove={id => void remove(id)} disabled={disabled || deleting} />
-        </Fragment>)}
+        {!loading && !items.length && !error && <p className="feed-message muted">{searchMode ? 'No matching messages.' : 'Write something below and send it.'}</p>}
+        {items.map((block, index) => <div key={block.id}>
+          {(!index || dayKey(items[index - 1].sent_at) !== dayKey(block.sent_at)) && <div className="day-divider">{dayLabel(block.sent_at)}</div>}
+          <TextBlock block={block} edit={edit} remove={id => void remove(id)} disabled={disabled || deleting} editing={editingId === block.id} />
+        </div>)}
       </div>
     </div>
-    {newBlocks && <button className="new-pill" onClick={() => { if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight; setNewBlocks(false) }}>New ↓</button>}
+    {newBlocks && <button className="new-pill" onClick={() => { if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight; setNewBlocks(false) }}>Latest ↓</button>}
   </>
 }

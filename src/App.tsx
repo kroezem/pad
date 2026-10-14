@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { getSession, loginEmail, signIn, signOut, watchAuth, type Filter, type Session } from './data'
+import { getSession, loginEmail, signIn, signOut, watchAuth, type Block, type Filter, type Session } from './data'
 import { usePad } from './usePad'
 import { ApiKeys } from './Panels'
 import { Feed } from './Feed'
-import { Background, type BackgroundPattern } from './Background'
+import { Background } from './Background'
 
 function useViewport() {
   useEffect(() => {
@@ -48,29 +48,17 @@ function Login() {
   </form></main>
 }
 
-function Composer({ pad, cut, blocked }: { pad: ReturnType<typeof usePad>; cut: () => void; blocked: boolean }) {
+function Composer({ pad, blocked }: { pad: ReturnType<typeof usePad>; blocked: boolean }) {
   const wrapper = useRef<HTMLDivElement>(null)
   const textarea = useRef<HTMLTextAreaElement>(null)
-  const selection = useRef({ start: 0, end: 0, direction: 'none' as 'forward' | 'backward' | 'none', scroll: 0 })
-  const noteId = pad.note?.id
   const resize = useCallback(() => {
     const element = textarea.current
     if (!element) return
-    const scroll = element.scrollTop
     element.style.height = '0px'
-    const max = parseFloat(getComputedStyle(element).maxHeight)
-    element.style.height = `${Math.min(element.scrollHeight, max || element.scrollHeight)}px`
-    element.scrollTop = scroll
+    const style = getComputedStyle(element)
+    element.style.height = `${Math.min(Math.max(element.scrollHeight, parseFloat(style.minHeight)), parseFloat(style.maxHeight))}px`
   }, [])
-  useLayoutEffect(() => {
-    resize()
-    const element = textarea.current
-    if (element && document.activeElement === element) {
-      const { start, end, direction, scroll } = selection.current
-      element.setSelectionRange(Math.min(start, pad.text.length), Math.min(end, pad.text.length), direction)
-      element.scrollTop = scroll
-    }
-  }, [pad.text, resize])
+  useLayoutEffect(() => { resize() }, [pad.text, resize])
   useLayoutEffect(() => {
     const element = wrapper.current
     if (!element) return
@@ -78,95 +66,79 @@ function Composer({ pad, cut, blocked }: { pad: ReturnType<typeof usePad>; cut: 
     observer.observe(element)
     window.addEventListener('resize', resize)
     window.visualViewport?.addEventListener('resize', resize)
-    window.visualViewport?.addEventListener('scroll', resize)
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('resize', resize)
-      window.visualViewport?.removeEventListener('resize', resize)
-      window.visualViewport?.removeEventListener('scroll', resize)
-    }
+    return () => { observer.disconnect(); window.removeEventListener('resize', resize); window.visualViewport?.removeEventListener('resize', resize) }
   }, [resize])
-  useEffect(() => {
-    if (noteId && !pad.loading && window.matchMedia('(hover: hover) and (pointer: fine)').matches) textarea.current?.focus({ preventScroll: true })
-  }, [noteId, pad.loading])
-  const status = pad.offline ? 'Offline' : pad.conflict ? 'Conflict' : pad.error ? 'Unsaved' : pad.saving || pad.dirty ? 'Saving…' : pad.loading ? 'Loading…' : 'Saved'
-  return <footer className="composer"><div className="composer-content" ref={wrapper}>
-    {pad.conflict && <div className="conflict-banner" role="status"><span>Changed on another device</span><div><button onClick={pad.controller?.useTheirs}>Use theirs</button><button onClick={pad.controller?.keepMine}>Keep mine</button></div></div>}
-    {pad.error && <div className="composer-error error" role="alert">{pad.error} <button onClick={() => void pad.controller?.refresh()}>Retry</button></div>}
-    <div className="composer-row">
-      <textarea ref={textarea} aria-label="Live draft" rows={1} placeholder="Write something…" value={pad.text} disabled={!pad.note || pad.loading || pad.transitioning || blocked} spellCheck={false} onChange={event => {
-        selection.current = { start: event.target.selectionStart, end: event.target.selectionEnd, direction: event.target.selectionDirection, scroll: event.target.scrollTop }
-        pad.controller?.edit(event.target.value)
-      }} onSelect={event => {
-        const element = event.currentTarget
-        selection.current = { start: element.selectionStart, end: element.selectionEnd, direction: element.selectionDirection, scroll: element.scrollTop }
-      }} onScroll={event => { selection.current.scroll = event.currentTarget.scrollTop }} onBlur={() => { void pad.controller?.save() }} onKeyDown={event => {
-        if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) { event.preventDefault(); cut() }
-      }} />
-      <button className="cut" disabled={blocked || pad.loading || pad.transitioning || !pad.note || !!pad.conflict || pad.offline || !pad.text.trim()} onClick={cut}>Cut</button>
-    </div>
-    <div className="composer-meta"><span role="status" aria-live="polite">{status}</span><span className="cut-hint">Ctrl / ⌘ + Enter to cut</span></div>
-  </div></footer>
+  useEffect(() => { if (pad.editing) textarea.current?.focus({ preventScroll: true }) }, [pad.editing])
+  return <footer className="composer" ref={wrapper}>
+    <textarea ref={textarea} aria-label={pad.editing ? 'Edit message' : 'Message'} rows={1} placeholder="Write something…" value={pad.text} disabled={pad.sending || blocked} spellCheck={false} onChange={event => pad.change(event.target.value)} onKeyDown={event => {
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing && !blocked) { event.preventDefault(); void pad.send() }
+    }} />
+    <div className="composer-meta"><span role="status" aria-live="polite">{pad.sending ? 'Sending…' : pad.failed ? <>Failed · <button disabled={blocked} onClick={() => void pad.send()}>Retry</button></> : pad.editing ? <>Editing message · <button disabled={blocked} onClick={pad.cancel}>Cancel</button></> : ''}{pad.editing && pad.failed && <> · <button disabled={blocked} onClick={pad.cancel}>Cancel</button></>}</span><div><span className="send-hint">⌘/Ctrl + Enter</span><button className="send" disabled={blocked || pad.sending || !pad.text.trim()} onClick={() => void pad.send()}>Send</button></div></div>
+  </footer>
 }
 
 function Scratchpad({ session }: { session: Session }) {
   const pad = usePad(session.user.id)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
-  const [searchOpen, setSearchOpen] = useState(false)
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const [keysOpen, setKeysOpen] = useState(false)
   const [menu, setMenu] = useState(false)
-  const [background, setBackground] = useState<BackgroundPattern>(() => {
-    try { return localStorage.getItem('pad:background') === 'topo' ? 'topo' : 'dots' }
-    catch { return 'dots' }
-  })
-  const changeBackground = (pattern: BackgroundPattern) => {
-    setBackground(pattern)
-    try { localStorage.setItem('pad:background', pattern) } catch { /* Keep the selection for this session. */ }
-  }
   const [busy, setBusy] = useState(false)
   const [authError, setAuthError] = useState('')
-  const [revision, setRevision] = useState(0)
-  const search = useRef<HTMLInputElement>(null)
+  const [editTarget, setEditTarget] = useState<Block | null>(null)
+  const top = useRef<HTMLElement>(null)
+  const dialog = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!editTarget) return
+    const previous = document.activeElement as HTMLElement | null
+    const element = dialog.current
+    element?.querySelector<HTMLButtonElement>('button')?.focus()
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !pad.sending) setEditTarget(null)
+      if (event.key !== 'Tab' || !element) return
+      const buttons = Array.from(element.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+      if (!buttons.length) { event.preventDefault(); return }
+      const first = buttons[0], last = buttons[buttons.length - 1]
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+    }
+    document.addEventListener('keydown', keydown)
+    return () => { document.removeEventListener('keydown', keydown); previous?.focus({ preventScroll: true }) }
+  }, [editTarget, pad.sending])
   const closeKeys = useCallback(() => setKeysOpen(false), [])
-  const transition = async (id?: string) => {
-    if (busy || keysOpen) return
-    if (await pad.controller?.transition(id)) setRevision(value => value + 1)
-  }
+  useLayoutEffect(() => {
+    const element = top.current
+    if (!element) return
+    const observer = new ResizeObserver(() => document.documentElement.style.setProperty('--top-height', `${element.getBoundingClientRect().height}px`))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  const edit = (block: Block) => { if (pad.text.trim()) setEditTarget(block); else pad.edit(block) }
   const logout = async (global: boolean) => {
     setMenu(false)
     if (global && !window.confirm('Sign out on all devices?')) return
-    await pad.controller?.save()
-    if (pad.controller?.dirty && !window.confirm('This draft has not been saved. Sign out and keep the draft on this device?')) return
     setBusy(true); setAuthError('')
-    try { await signOut(global) }
-    catch { setAuthError('Unable to sign out. Try again.') }
+    try { await signOut(global) } catch { setAuthError('Unable to sign out. Try again.') }
     setBusy(false)
   }
-  return <><Background pattern={background} /><main className="app-shell">
-    <header className={`top-bar${searchOpen || query ? ' search-open' : ''}`}>
-      <div className="top-column">
-        <button className="search-toggle" aria-label="Search blocks" aria-expanded={searchOpen || !!query} onClick={() => { setSearchOpen(true); requestAnimationFrame(() => search.current?.focus({ preventScroll: true })) }}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="10" cy="10" r="6" /><path d="m15 15 6 6" /></svg></button>
-        <div className="search-field"><label className="sr-only" htmlFor="search">Search blocks</label><input ref={search} id="search" type="search" placeholder="Search pad" value={query} onChange={event => setQuery(event.target.value)} autoComplete="off" />
-          <button className="search-close" aria-label="Close search" onClick={() => { setQuery(''); setSearchOpen(false); search.current?.blur() }}>×</button>
-        </div>
-        <div className="filters" aria-label="Filter blocks">{(['all', 'text', 'links'] as const).map(value => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{value[0].toUpperCase() + value.slice(1)}</button>)}</div>
-        <div className="menu-wrap"><button aria-expanded={menu} aria-controls="pad-menu" aria-label="Open menu" onClick={() => setMenu(!menu)}>•••</button>
-          {menu && <><button className="menu-dismiss" aria-label="Close menu" onClick={() => setMenu(false)} tabIndex={-1} /><div className="menu" id="pad-menu" onKeyDown={event => { if (event.key === 'Escape') setMenu(false) }}>
-            <div className="background-options" role="group" aria-label="Background">
-              <span>Background</span>
-              <div>{(['dots', 'topo'] as const).map(pattern => <button key={pattern} aria-pressed={background === pattern} onClick={() => changeBackground(pattern)}>{pattern === 'dots' ? 'Dots' : 'Topo'}</button>)}</div>
-            </div>
-            <button onClick={() => { setMenu(false); setKeysOpen(true) }}>API key</button>
-            <button disabled={busy || pad.transitioning} onClick={() => void logout(false)}>Sign out</button>
-            <button disabled={busy || pad.transitioning} onClick={() => void logout(true)}>Sign out everywhere</button>
-          </div></>}
-        </div>
+  const options = (['all', 'text', 'links'] as const).map(value => <button key={value} aria-pressed={filter === value} onClick={() => { setFilter(value); setFiltersOpen(false) }}>{value[0].toUpperCase() + value.slice(1)}</button>)
+  return <><Background /><main className="app-shell">
+    <header className="top-bar" ref={top}>
+      <div className="search-field"><label className="sr-only" htmlFor="search">Search messages</label><input id="search" type="search" placeholder="Search pad" value={query} onChange={event => setQuery(event.target.value)} autoComplete="off" /></div>
+      <div className="filter-section"><div className="filters" aria-label="Filter messages">{options}</div><button className="filter-toggle" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)}>{filter[0].toUpperCase() + filter.slice(1)}</button>{filtersOpen && <><button className="menu-dismiss" aria-label="Close filters" onClick={() => setFiltersOpen(false)} /><div className="filter-popover">{options}</div></>}</div>
+      <div className="menu-wrap"><button aria-expanded={menu} aria-controls="pad-menu" aria-label="Open menu" onClick={() => setMenu(!menu)}>•••</button>
+        {menu && <><button className="menu-dismiss" aria-label="Close menu" onClick={() => setMenu(false)} tabIndex={-1} /><div className="menu" id="pad-menu" onKeyDown={event => { if (event.key === 'Escape') setMenu(false) }}>
+          <button onClick={() => { setMenu(false); setKeysOpen(true) }}>API key</button>
+          <button disabled={busy || pad.sending} onClick={() => void logout(false)}>Sign out</button>
+          <button disabled={busy || pad.sending} onClick={() => void logout(true)}>Sign out everywhere</button>
+        </div></>}
       </div>
     </header>
     {authError && <div className="auth-error error" role="alert">{authError}</div>}
-    <Feed userId={session.user.id} query={query} filter={filter} revision={revision} edit={id => void transition(id)} disabled={busy || pad.transitioning || pad.loading || !!pad.conflict || pad.offline} />
-    <Composer pad={pad} cut={() => void transition()} blocked={busy || keysOpen} />
+    <Feed userId={session.user.id} query={query} filter={filter} sent={pad.sent} editingId={pad.editing?.id} edit={edit} disabled={busy || pad.sending || !!editTarget} />
+    <Composer pad={pad} blocked={busy || keysOpen || !!editTarget} />
+    {editTarget && <div className="dialog-backdrop"><div ref={dialog} className="draft-dialog" role="dialog" aria-modal="true" aria-label="Draft already in composer"><p>You have text in the composer.</p><button disabled={pad.sending} onClick={async () => { if (await pad.send()) { pad.edit(editTarget); setEditTarget(null) } }}>Send draft first</button><button disabled={pad.sending} onClick={() => { pad.edit(editTarget); setEditTarget(null) }}>Discard draft</button><button disabled={pad.sending} onClick={() => setEditTarget(null)}>Cancel</button>{pad.failed && <p className="error" role="alert">Failed · Try sending again.</p>}</div></div>}
     {keysOpen && <ApiKeys close={closeKeys} />}
   </main></>
 }

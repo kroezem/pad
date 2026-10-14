@@ -16,19 +16,12 @@ export type Block = {
   id: string
   content: string
   created_at: string
-  archived_at: string
+  sent_at: string
   attachments?: Attachment[]
   snippet?: string
   rank?: number
 }
-export type Note = Omit<Block, 'archived_at'> & {
-  user_id: string
-  version: number
-  status: 'current' | 'archived'
-  archived_at: string | null
-  updated_at: string
-  last_edited_at: string
-}
+export type Note = Block & { user_id: string; updated_at: string }
 export type Filter = 'all' | 'text' | 'links'
 export type ApiKey = { id: string; label: string; created_at: string; last_used_at: string | null; revoked_at: string | null }
 export type NoteEvent = { type: 'INSERT' | 'UPDATE'; note: Note } | { type: 'DELETE'; id: string } | { type: 'READY' }
@@ -61,12 +54,9 @@ async function noteRpc(name: string, args?: Record<string, unknown>): Promise<No
   if (!note?.id) throw new Error('No note returned')
   return note
 }
-export const getCurrentNote = () => noteRpc('get_current_note')
-export const cutNote = () => noteRpc('new_note')
-export const editNote = (id: string) => noteRpc('edit_note', { p_id: id })
+export const sendNote = (content: string) => noteRpc('send_note', { p_content: content })
+export const updateNote = (id: string, content: string) => noteRpc('update_note', { p_id: id, p_content: content })
 export const deleteNote = (id: string) => rpc<void>('delete_note', { p_id: id })
-export const saveNote = (id: string, content: string, version: number) =>
-  rpc<{ ok: boolean; note: Note }>('save_note', { p_id: id, p_content: content, p_expected_version: version })
 export const feedNotes = (before: string | null = null, limit = 50) =>
   rpc<Block[]>('feed_notes', { p_before: before, p_limit: limit })
 export const searchNotes = (query: string, filter: Filter, offset = 0, limit = 50) =>

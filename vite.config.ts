@@ -6,12 +6,12 @@ export default defineConfig({
   plugins: [react(), VitePWA({
     registerType: 'autoUpdate',
     injectRegister: 'script-defer',
-    includeAssets: ['icons/*.png', 'icons/pad.svg'],
+    includeAssets: ['icons/*.png', 'icons/favicon.svg'],
     manifest: {
       id: '/',
       name: 'pad',
       short_name: 'pad',
-      description: 'Your personal live text pad.',
+      description: 'Your personal message feed.',
       display: 'standalone',
       start_url: '/',
       scope: '/',
