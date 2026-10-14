@@ -3,6 +3,7 @@ import { getSession, loginEmail, signIn, signOut, watchAuth, type Filter, type S
 import { usePad } from './usePad'
 import { ApiKeys } from './Panels'
 import { Feed } from './Feed'
+import { Background, type BackgroundPattern } from './Background'
 
 function useViewport() {
   useEffect(() => {
@@ -115,6 +116,14 @@ function Scratchpad({ session }: { session: Session }) {
   const [searchOpen, setSearchOpen] = useState(false)
   const [keysOpen, setKeysOpen] = useState(false)
   const [menu, setMenu] = useState(false)
+  const [background, setBackground] = useState<BackgroundPattern>(() => {
+    try { return localStorage.getItem('pad:background') === 'topo' ? 'topo' : 'dots' }
+    catch { return 'dots' }
+  })
+  const changeBackground = (pattern: BackgroundPattern) => {
+    setBackground(pattern)
+    try { localStorage.setItem('pad:background', pattern) } catch { /* Keep the selection for this session. */ }
+  }
   const [busy, setBusy] = useState(false)
   const [authError, setAuthError] = useState('')
   const [revision, setRevision] = useState(0)
@@ -134,7 +143,7 @@ function Scratchpad({ session }: { session: Session }) {
     catch { setAuthError('Unable to sign out. Try again.') }
     setBusy(false)
   }
-  return <main className="app-shell">
+  return <><Background pattern={background} /><main className="app-shell">
     <header className={`top-bar${searchOpen || query ? ' search-open' : ''}`}>
       <div className="top-column">
         <button className="search-toggle" aria-label="Search blocks" aria-expanded={searchOpen || !!query} onClick={() => { setSearchOpen(true); requestAnimationFrame(() => search.current?.focus({ preventScroll: true })) }}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><circle cx="10" cy="10" r="6" /><path d="m15 15 6 6" /></svg></button>
@@ -144,6 +153,10 @@ function Scratchpad({ session }: { session: Session }) {
         <div className="filters" aria-label="Filter blocks">{(['all', 'text', 'links'] as const).map(value => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{value[0].toUpperCase() + value.slice(1)}</button>)}</div>
         <div className="menu-wrap"><button aria-expanded={menu} aria-controls="pad-menu" aria-label="Open menu" onClick={() => setMenu(!menu)}>•••</button>
           {menu && <><button className="menu-dismiss" aria-label="Close menu" onClick={() => setMenu(false)} tabIndex={-1} /><div className="menu" id="pad-menu" onKeyDown={event => { if (event.key === 'Escape') setMenu(false) }}>
+            <div className="background-options" role="group" aria-label="Background">
+              <span>Background</span>
+              <div>{(['dots', 'topo'] as const).map(pattern => <button key={pattern} aria-pressed={background === pattern} onClick={() => changeBackground(pattern)}>{pattern === 'dots' ? 'Dots' : 'Topo'}</button>)}</div>
+            </div>
             <button onClick={() => { setMenu(false); setKeysOpen(true) }}>API key</button>
             <button disabled={busy || pad.transitioning} onClick={() => void logout(false)}>Sign out</button>
             <button disabled={busy || pad.transitioning} onClick={() => void logout(true)}>Sign out everywhere</button>
@@ -155,7 +168,7 @@ function Scratchpad({ session }: { session: Session }) {
     <Feed userId={session.user.id} query={query} filter={filter} revision={revision} edit={id => void transition(id)} disabled={busy || pad.transitioning || pad.loading || !!pad.conflict || pad.offline} />
     <Composer pad={pad} cut={() => void transition()} blocked={busy || keysOpen} />
     {keysOpen && <ApiKeys close={closeKeys} />}
-  </main>
+  </main></>
 }
 
 export default function App() {

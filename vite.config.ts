@@ -15,8 +15,8 @@ export default defineConfig({
       display: 'standalone',
       start_url: '/',
       scope: '/',
-      background_color: '#3c3c3c',
-      theme_color: '#3c3c3c',
+      background_color: '#0f0f10',
+      theme_color: '#0f0f10',
       icons: [
         { src: '/icons/pad-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
         { src: '/icons/pad-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },

@@ -6,6 +6,8 @@ import zlib
 
 OUTPUT = Path(__file__).resolve().parent.parent / 'public' / 'icons'
 OUTPUT.mkdir(parents=True, exist_ok=True)
+BACKGROUND = (15, 15, 16)
+FOREGROUND = (242, 242, 242)
 
 
 def chunk(kind, data):
@@ -26,8 +28,8 @@ def icon(size, name):
         for x in range(size):
             coverage = sum(letter((x + dx) / size, (y + dy) / size)
                            for dx in (.25, .75) for dy in (.25, .75)) / 4
-            color = round(60 + 195 * coverage)
-            rows.extend((color, color, color))
+            rows.extend(round(bg + (fg - bg) * coverage)
+                        for bg, fg in zip(BACKGROUND, FOREGROUND))
     data = b'\x89PNG\r\n\x1a\n'
     data += chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0))
     data += chunk(b'IDAT', zlib.compress(rows, 9)) + chunk(b'IEND', b'')
